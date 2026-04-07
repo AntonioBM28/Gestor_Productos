@@ -1,124 +1,119 @@
-from flask_sqlalchemy import SQLAlchemy
+"""Serialization helpers and validators for MongoDB documents."""
+from bson import ObjectId
 from datetime import datetime, timezone
 
-db = SQLAlchemy()
+
+# ─── Serialization Helpers ────────────────────────────────────────────────────
+
+def serialize_user(user):
+    """Convert a MongoDB user document to a JSON-friendly dict."""
+    if not user:
+        return None
+    return {
+        'id': str(user['_id']),
+        'username': user.get('username', ''),
+        'email': user.get('email', ''),
+        'role': user.get('role', 'user'),
+        'created_at': user['created_at'].isoformat() if user.get('created_at') else None
+    }
 
 
-class User(db.Model):
-    __tablename__ = 'users'
-
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default='user')  # 'user' or 'admin'
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-
-    cart_items = db.relationship('CartItem', backref='user', lazy=True, cascade='all, delete-orphan')
-    orders = db.relationship('Order', backref='user', lazy=True)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email,
-            'role': self.role,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
+def serialize_product(product):
+    """Convert a MongoDB product document to a JSON-friendly dict."""
+    if not product:
+        return None
+    return {
+        'id': str(product['_id']),
+        'name': product.get('name', ''),
+        'description': product.get('description', ''),
+        'price': product.get('price', 0),
+        'stock': product.get('stock', 0),
+        'image_url': product.get('image_url', ''),
+        'category': product.get('category', ''),
+        'created_at': product['created_at'].isoformat() if product.get('created_at') else None,
+        'updated_at': product['updated_at'].isoformat() if product.get('updated_at') else None
+    }
 
 
-class Product(db.Model):
-    __tablename__ = 'products'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    price = db.Column(db.Float, nullable=False)
-    stock = db.Column(db.Integer, nullable=False, default=0)
-    image_url = db.Column(db.String(500), nullable=True)
-    category = db.Column(db.String(100), nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
-                           onupdate=lambda: datetime.now(timezone.utc))
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'name': self.name,
-            'description': self.description,
-            'price': self.price,
-            'stock': self.stock,
-            'image_url': self.image_url,
-            'category': self.category,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
-        }
+def serialize_cart_item(cart_item, product=None):
+    """Convert a MongoDB cart_item document to a JSON-friendly dict."""
+    if not cart_item:
+        return None
+    result = {
+        'id': str(cart_item['_id']),
+        'user_id': str(cart_item.get('user_id', '')),
+        'product_id': str(cart_item.get('product_id', '')),
+        'quantity': cart_item.get('quantity', 1),
+        'added_at': cart_item['added_at'].isoformat() if cart_item.get('added_at') else None
+    }
+    if product:
+        result['product'] = serialize_product(product)
+    return result
 
 
-class CartItem(db.Model):
-    __tablename__ = 'cart_items'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-    quantity = db.Column(db.Integer, nullable=False, default=1)
-    added_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-
-    product = db.relationship('Product', backref='cart_items')
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'product_id': self.product_id,
-            'quantity': self.quantity,
-            'product': self.product.to_dict() if self.product else None,
-            'added_at': self.added_at.isoformat() if self.added_at else None
-        }
+def serialize_order(order):
+    """Convert a MongoDB order document to a JSON-friendly dict."""
+    if not order:
+        return None
+    return {
+        'id': str(order['_id']),
+        'user_id': str(order.get('user_id', '')),
+        'total': order.get('total', 0),
+        'status': order.get('status', 'pending'),
+        'reference_code': order.get('reference_code', ''),
+        'items': order.get('items', []),
+        'created_at': order['created_at'].isoformat() if order.get('created_at') else None,
+        'confirmed_at': order['confirmed_at'].isoformat() if order.get('confirmed_at') else None
+    }
 
 
-class Order(db.Model):
-    __tablename__ = 'orders'
+# ─── Validation Helpers ──────────────────────────────────────────────────────
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    total = db.Column(db.Float, nullable=False)
-    status = db.Column(db.String(20), nullable=False, default='pending')  # pending, confirmed, cancelled
-    reference_code = db.Column(db.String(50), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    confirmed_at = db.Column(db.DateTime, nullable=True)
+def validate_product_data(data, require_all=True):
+    """Validate product data. Returns (is_valid, error_message)."""
+    if require_all:
+        if not data.get('name', '').strip():
+            return False, 'Name is required'
+        if data.get('price') is None:
+            return False, 'Price is required'
 
-    items = db.relationship('OrderItem', backref='order', lazy=True, cascade='all, delete-orphan')
+    if 'price' in data and data['price'] is not None:
+        try:
+            price = float(data['price'])
+            if price < 0:
+                return False, 'Price must be positive'
+        except (ValueError, TypeError):
+            return False, 'Price must be a number'
 
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'total': self.total,
-            'status': self.status,
-            'reference_code': self.reference_code,
-            'items': [item.to_dict() for item in self.items],
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'confirmed_at': self.confirmed_at.isoformat() if self.confirmed_at else None
-        }
+    if 'stock' in data and data['stock'] is not None:
+        try:
+            stock = int(data['stock'])
+            if stock < 0:
+                return False, 'Stock must be non-negative'
+        except (ValueError, TypeError):
+            return False, 'Stock must be an integer'
+
+    return True, None
 
 
-class OrderItem(db.Model):
-    __tablename__ = 'order_items'
+def validate_user_data(data):
+    """Validate user registration data. Returns (is_valid, error_message)."""
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip()
+    password = data.get('password', '')
 
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.Integer, db.ForeignKey('orders.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-    quantity = db.Column(db.Integer, nullable=False)
-    price_at_purchase = db.Column(db.Float, nullable=False)
+    if not username or not email or not password:
+        return False, 'Username, email, and password are required'
 
-    product = db.relationship('Product')
+    if len(password) < 6:
+        return False, 'Password must be at least 6 characters'
 
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'product_id': self.product_id,
-            'product_name': self.product.name if self.product else None,
-            'quantity': self.quantity,
-            'price_at_purchase': self.price_at_purchase
-        }
+    return True, None
+
+
+def to_object_id(id_str):
+    """Safely convert a string to ObjectId. Returns None if invalid."""
+    try:
+        return ObjectId(id_str)
+    except Exception:
+        return None

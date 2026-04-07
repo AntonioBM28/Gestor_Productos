@@ -1,6 +1,9 @@
-"""Serialization helpers and validators for MongoDB documents."""
+"""Serialization helpers, schemas and validators for MongoDB documents."""
+import re
 from bson import ObjectId
 from datetime import datetime, timezone
+from marshmallow import Schema, fields, validate, validates, ValidationError, pre_load
+from security import sanitize_string
 
 
 # ─── Serialization Helpers ────────────────────────────────────────────────────
@@ -14,6 +17,7 @@ def serialize_user(user):
         'username': user.get('username', ''),
         'email': user.get('email', ''),
         'role': user.get('role', 'user'),
+        'is_active': user.get('is_active', True),
         'created_at': user['created_at'].isoformat() if user.get('created_at') else None
     }
 
@@ -67,49 +71,7 @@ def serialize_order(order):
     }
 
 
-# ─── Validation Helpers ──────────────────────────────────────────────────────
-
-def validate_product_data(data, require_all=True):
-    """Validate product data. Returns (is_valid, error_message)."""
-    if require_all:
-        if not data.get('name', '').strip():
-            return False, 'Name is required'
-        if data.get('price') is None:
-            return False, 'Price is required'
-
-    if 'price' in data and data['price'] is not None:
-        try:
-            price = float(data['price'])
-            if price < 0:
-                return False, 'Price must be positive'
-        except (ValueError, TypeError):
-            return False, 'Price must be a number'
-
-    if 'stock' in data and data['stock'] is not None:
-        try:
-            stock = int(data['stock'])
-            if stock < 0:
-                return False, 'Stock must be non-negative'
-        except (ValueError, TypeError):
-            return False, 'Stock must be an integer'
-
-    return True, None
-
-
-def validate_user_data(data):
-    """Validate user registration data. Returns (is_valid, error_message)."""
-    username = data.get('username', '').strip()
-    email = data.get('email', '').strip()
-    password = data.get('password', '')
-
-    if not username or not email or not password:
-        return False, 'Username, email, and password are required'
-
-    if len(password) < 6:
-        return False, 'Password must be at least 6 characters'
-
-    return True, None
-
+# ─── ObjectId Helper ─────────────────────────────────────────────────────────
 
 def to_object_id(id_str):
     """Safely convert a string to ObjectId. Returns None if invalid."""
@@ -117,3 +79,162 @@ def to_object_id(id_str):
         return ObjectId(id_str)
     except Exception:
         return None
+
+
+# ─── Marshmallow Schemas ─────────────────────────────────────────────────────
+
+EMAIL_REGEX = re.compile(
+    r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+)
+USERNAME_REGEX = re.compile(r'^[a-zA-Z0-9_.-]{3,30}$')
+
+
+class UserRegistrationSchema(Schema):
+    """Schema for user registration validation."""
+    username = fields.String(
+        required=True,
+        validate=validate.Length(min=3, max=30)
+    )
+    email = fields.String(
+        required=True,
+        validate=validate.Length(min=5, max=120)
+    )
+    password = fields.String(
+        required=True,
+        validate=validate.Length(min=8, max=128),
+        load_only=True
+    )
+
+    @pre_load
+    def strip_fields(self, data, **kwargs):
+        """Strip whitespace from string fields."""
+        if 'username' in data and isinstance(data['username'], str):
+            data['username'] = sanitize_string(data['username'], max_length=30)
+        if 'email' in data and isinstance(data['email'], str):
+            data['email'] = data['email'].strip().lower()[:120]
+        return data
+
+    @validates('username')
+    def validate_username(self, value, **kwargs):
+        if not USERNAME_REGEX.match(value):
+            raise ValidationError(
+                'El nombre de usuario solo puede contener letras, números, '
+                'guiones, puntos y guiones bajos (3-30 caracteres)'
+            )
+
+    @validates('email')
+    def validate_email(self, value, **kwargs):
+        if not EMAIL_REGEX.match(value):
+            raise ValidationError('Formato de email inválido')
+
+
+class UserLoginSchema(Schema):
+    """Schema for user login validation."""
+    email = fields.String(required=True, validate=validate.Length(min=1, max=120))
+    password = fields.String(required=True, validate=validate.Length(min=1, max=128))
+
+    @pre_load
+    def strip_fields(self, data, **kwargs):
+        if 'email' in data and isinstance(data['email'], str):
+            data['email'] = data['email'].strip().lower()[:120]
+        return data
+
+
+class ChangePasswordSchema(Schema):
+    """Schema for password change validation."""
+    current_password = fields.String(required=True, validate=validate.Length(min=1, max=128))
+    new_password = fields.String(required=True, validate=validate.Length(min=8, max=128))
+
+
+class ProductSchema(Schema):
+    """Schema for product creation/update validation."""
+    name = fields.String(validate=validate.Length(min=1, max=200))
+    description = fields.String(validate=validate.Length(max=2000), load_default='')
+    price = fields.Float(validate=validate.Range(min=0.01, max=1_000_000))
+    stock = fields.Integer(validate=validate.Range(min=0, max=99_999), load_default=0)
+    image_url = fields.String(validate=validate.Length(max=500), load_default='')
+    category = fields.String(validate=validate.Length(max=100), load_default='')
+
+    @pre_load
+    def sanitize_fields(self, data, **kwargs):
+        """Sanitize string fields."""
+        if 'name' in data and isinstance(data['name'], str):
+            data['name'] = sanitize_string(data['name'], max_length=200)
+        if 'description' in data and isinstance(data['description'], str):
+            data['description'] = sanitize_string(data['description'], max_length=2000)
+        if 'category' in data and isinstance(data['category'], str):
+            data['category'] = sanitize_string(data['category'], max_length=100)
+        if 'image_url' in data and isinstance(data['image_url'], str):
+            data['image_url'] = data['image_url'].strip()[:500]
+        return data
+
+
+class ProductCreateSchema(ProductSchema):
+    """Schema for product creation — name and price are required."""
+    name = fields.String(required=True, validate=validate.Length(min=1, max=200))
+    price = fields.Float(required=True, validate=validate.Range(min=0.01, max=1_000_000))
+
+
+class CartItemSchema(Schema):
+    """Schema for adding/updating cart items."""
+    product_id = fields.String(required=True, validate=validate.Length(min=1, max=50))
+    quantity = fields.Integer(
+        validate=validate.Range(min=1, max=100),
+        load_default=1
+    )
+
+
+class CartUpdateSchema(Schema):
+    """Schema for updating cart item quantity."""
+    quantity = fields.Integer(
+        required=True,
+        validate=validate.Range(min=0, max=100)
+    )
+
+
+class RoleUpdateSchema(Schema):
+    """Schema for updating user role."""
+    role = fields.String(
+        required=True,
+        validate=validate.OneOf(['user', 'admin'])
+    )
+
+    @pre_load
+    def strip_role(self, data, **kwargs):
+        if 'role' in data and isinstance(data['role'], str):
+            data['role'] = data['role'].strip().lower()
+        return data
+
+
+# ─── Legacy Validation (kept for backward compatibility) ─────────────────────
+
+def validate_product_data(data, require_all=True):
+    """Validate product data using Marshmallow schema.
+
+    Returns (is_valid, error_message).
+    """
+    try:
+        schema = ProductCreateSchema() if require_all else ProductSchema()
+        schema.load(data)
+        return True, None
+    except ValidationError as e:
+        # Get the first error message
+        for field_errors in e.messages.values():
+            if isinstance(field_errors, list) and field_errors:
+                return False, field_errors[0]
+        return False, 'Datos inválidos'
+
+
+def validate_user_data(data):
+    """Validate user registration data using Marshmallow schema.
+
+    Returns (is_valid, error_message).
+    """
+    try:
+        UserRegistrationSchema().load(data)
+        return True, None
+    except ValidationError as e:
+        for field_errors in e.messages.values():
+            if isinstance(field_errors, list) and field_errors:
+                return False, field_errors[0]
+        return False, 'Datos inválidos'

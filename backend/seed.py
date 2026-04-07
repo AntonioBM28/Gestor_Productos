@@ -19,11 +19,12 @@ def seed():
             users_col.insert_one({
                 'username': 'admin',
                 'email': 'admin@gestorproductos.com',
-                'password_hash': generate_password_hash('admin123'),
+                'password_hash': generate_password_hash('Admin@2024Secure!'),
                 'role': 'admin',
+                'is_active': True,
                 'created_at': now
             })
-            print('✓ Admin user created: admin@gestorproductos.com / admin123')
+            print('✓ Admin user created: admin@gestorproductos.com / Admin@2024Secure!')
 
         # ── Seed Sample Products ─────────────────────────────────────────
         if products_col.count_documents({}) > 0:
